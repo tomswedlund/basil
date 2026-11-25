@@ -1,0 +1,6 @@
+bin/
+obj/
+*.node
+*.so
+.vs/
+.vscode/
