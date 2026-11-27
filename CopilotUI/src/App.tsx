@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
 import './App.css'
 import sidebarIcon from './sidebar-toggle.svg'
 import gearIcon from './gear-icon.svg'
@@ -12,9 +13,36 @@ const UserMessage = ({ content }) => (
 
 const AssistantMessage = ({ content }) => (
   <div className="message assistant">
-    <div className="assistant-bubble">{content}</div>
+    <div className="assistant-bubble"><ReactMarkdown>{content}</ReactMarkdown></div>
   </div>
 )
+
+const ToolCallMessage = ({ toolName, description, arguments: args, status, result, idx, turnId }) => {
+  const [expanded, setExpanded] = useState(false)
+  const isRunning = status === 'running'
+  const headerLabel = description || 'Tool call'
+  let prettyArgs = ''
+  try { prettyArgs = JSON.stringify(JSON.parse(args || '{}'), null, 2) } catch { prettyArgs = args || '{}' }
+
+  return (
+    <div className="message tool-call">
+      <div className="tool-call-card">
+        <div className="tool-call-header" onClick={() => setExpanded(!expanded)}>
+          <span className="tool-call-toggle">{expanded ? '▼' : '▶'}</span>
+          <span className="tool-call-name">{headerLabel}</span>
+          {!expanded && isRunning && <span className="tool-call-spinner"></span>}
+        </div>
+        {expanded && (
+          <div className="tool-call-body">
+            <pre className="tool-call-args">{prettyArgs}</pre>
+            {isRunning && <div className="tool-call-running">Running ...</div>}
+            {status === 'complete' && result && <pre className="tool-result-output">{result}</pre>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const ThinkingIndicator = () => (
   <div className="thinking-indicator">
@@ -42,11 +70,11 @@ const ChatInput = ({ inputProps, onSend, thinking }) => (
 const Messages = ({ messages, inputProps, onSend, thinking }) => (
   <>
     <div className="messages">
-      {messages.map((m, i) =>
-        m.role === 'user'
-          ? <UserMessage key={i} content={m.content} />
-          : <AssistantMessage key={i} content={m.content} />
-      )}
+      {messages.map((m, i) => {
+        if (m.role === 'user') return <UserMessage key={i} content={m.content} />
+        if (m.role === 'tool_call') return <ToolCallMessage key={i} toolName={m.toolName} description={m.description} arguments={m.arguments} status={m.status} result={m.result} idx={i} turnId={m.turnId} />
+        return <AssistantMessage key={i} content={m.content} />
+      })}
     </div>
     <ChatInput inputProps={inputProps} onSend={onSend} thinking={thinking} />
   </>
@@ -149,7 +177,7 @@ function App() {
   const [input, setInput] = useState('')
   const [sessions, setSessions] = useState<{id:string, title:string, status:string}[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string>('')
-  const [messagesMap, setMessagesMap] = useState<Record<string, {role:string, content:string}[]>>({})
+  const [messagesMap, setMessagesMap] = useState<Record<string, {role:string, content:string, turnId?:string, toolCallId?:string, toolName?:string, description?:string, arguments?:string, status?:string, result?:string}[]>>({})
   const tempIdsRef = useRef<Set<string>>(new Set())
   const [chatCollapsed, setChatCollapsed] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -208,7 +236,7 @@ function App() {
     try {
       const res = await fetch(`/api/v1/sessions/${sessionId}/messages`)
       if (res.ok) {
-        const msgs: {role:string, content:string}[] = await res.json()
+        const msgs: {role:string, content:string, toolCallId?:string, toolName?:string, description?:string, arguments?:string, status?:string, result?:string}[] = await res.json()
         setMessagesMap(m => ({ ...m, [sessionId]: msgs }))
       }
     } catch (e) {
@@ -405,6 +433,38 @@ function App() {
                   return { ...m, [sessionId]: arr }
                 })
               }
+            } catch {}
+          } else if (eventType === 'tool_call') {
+            try {
+              const data = JSON.parse(dataStr)
+              gotMessage = true
+              setMessagesMap(m => {
+                const arr = [...(m[sessionId] ?? [])]
+                arr.push({
+                  role: 'tool_call',
+                  content: '',
+                  toolCallId: data.toolCallId,
+                  toolName: data.toolName,
+                  description: data.description,
+                  arguments: data.arguments,
+                  status: 'running',
+                })
+                return { ...m, [sessionId]: arr }
+              })
+            } catch {}
+          } else if (eventType === 'tool_result' || eventType === 'tool_execution') {
+            try {
+              const data = JSON.parse(dataStr)
+              const toolCallId = data.toolCallId
+              const resultContent = data.content || ''
+              setMessagesMap(m => {
+                const arr = [...(m[sessionId] ?? [])]
+                const tcIdx = arr.findIndex(msg => msg.toolCallId === toolCallId && msg.role === 'tool_call')
+                if (tcIdx >= 0) {
+                  arr[tcIdx] = { ...arr[tcIdx], status: 'complete', result: resultContent }
+                }
+                return { ...m, [sessionId]: arr }
+              })
             } catch {}
           }
         }

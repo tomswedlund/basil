@@ -93,3 +93,36 @@ html, body { height: 100%; background: #0d1117; color: #e6edf3; font-family: -ap
 .thinking-dot:nth-child(2) { animation-delay: 0.15s; }
 .thinking-dot:nth-child(3) { animation-delay: 0.3s; }
 @keyframes thinking-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-6px); opacity: 1; } }
+
+/* Tool call — collapsible card with running/complete states */
+.message.tool-call { align-self: stretch; width: 100%; }
+.tool-call-card { background: #161b22; border: 1px solid #30363d; border-left: 3px solid #d29922; border-radius: 6px; padding: 0; width: 100%; box-sizing: border-box; overflow: hidden; }
+.tool-call-header { display: flex; align-items: center; gap: 8px; padding: 4px 12px; cursor: pointer; user-select: none; }
+.tool-call-header:hover { background: #21262d; }
+.tool-call-toggle { font-size: 9px; color: #7d8590; width: 10px; flex-shrink: 0; }
+.tool-call-name { font-size: 11px; font-weight: 600; color: #d29922; font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-call-spinner { width: 12px; height: 12px; border: 2px solid #30363d; border-top-color: #d29922; border-radius: 50%; animation: tool-spin 0.6s linear infinite; flex-shrink: 0; }
+@keyframes tool-spin { to { transform: rotate(360deg); } }
+.tool-call-body { padding: 0 12px 6px 12px; }
+.tool-call-args { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 6px; font-size: 10px; color: #e6edf3; font-family: monospace; overflow-x: auto; white-space: pre; margin: 0 0 6px 0; }
+.tool-call-running { font-size: 10px; font-style: italic; color: #7d8590; background: linear-gradient(90deg, #30363d 0%, #d29922 50%, #30363d 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: tool-running-wave 2s linear infinite; white-space: nowrap; }
+@keyframes tool-running-wave { to { background-position: -200% 0; } }
+.tool-result-output { font-size: 10px; color: #e6edf3; font-family: monospace; margin: 0; white-space: pre; background: #0d1117; border: 1px solid #21262d; border-left: 3px solid #3fb950; border-radius: 4px; padding: 6px; overflow-x: auto; }
+
+/* Markdown styling for assistant messages */
+.assistant-bubble p { margin: 0 0 8px 0; }
+.assistant-bubble p:last-child { margin-bottom: 0; }
+.assistant-bubble h1, .assistant-bubble h2, .assistant-bubble h3 { color: #e6edf3; margin: 12px 0 6px 0; font-weight: 600; }
+.assistant-bubble h1 { font-size: 18px; }
+.assistant-bubble h2 { font-size: 16px; }
+.assistant-bubble h3 { font-size: 14px; }
+.assistant-bubble ul, .assistant-bubble ol { margin: 6px 0; padding-left: 20px; }
+.assistant-bubble li { margin: 2px 0; }
+.assistant-bubble code { font-family: monospace; font-size: 12px; background: #161b22; border: 1px solid #21262d; border-radius: 3px; padding: 1px 4px; }
+.assistant-bubble pre { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 10px; overflow-x: auto; margin: 8px 0; }
+.assistant-bubble pre code { background: none; border: none; padding: 0; font-size: 12px; }
+.assistant-bubble a { color: #58a6ff; text-decoration: none; }
+.assistant-bubble a:hover { text-decoration: underline; }
+.assistant-bubble blockquote { border-left: 3px solid #30363d; padding-left: 12px; margin: 8px 0; color: #7d8590; }
+.assistant-bubble table { border-collapse: collapse; margin: 8px 0; }
+.assistant-bubble th, .assistant-bubble td { border: 1px solid #30363d; padding: 4px 8px; font-size: 12px; }
