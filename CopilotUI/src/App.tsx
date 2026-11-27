@@ -16,7 +16,30 @@ const AssistantMessage = ({ content }) => (
   </div>
 )
 
-const Messages = ({ messages, inputProps, onSend }) => (
+const ThinkingIndicator = () => (
+  <div className="thinking-indicator">
+    <span className="thinking-dot"></span>
+    <span className="thinking-dot"></span>
+    <span className="thinking-dot"></span>
+  </div>
+)
+
+const ChatInput = ({ inputProps, onSend, thinking }) => (
+  <div className="input-area">
+    {thinking && <ThinkingIndicator />}
+    <div className="input-wrapper">
+      <input
+        value={inputProps.value}
+        onChange={inputProps.onChange}
+        placeholder={inputProps.placeholder}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend?.(); } }}
+      />
+      <button onClick={onSend}>➤</button>
+    </div>
+  </div>
+)
+
+const Messages = ({ messages, inputProps, onSend, thinking }) => (
   <>
     <div className="messages">
       {messages.map((m, i) =>
@@ -25,17 +48,7 @@ const Messages = ({ messages, inputProps, onSend }) => (
           : <AssistantMessage key={i} content={m.content} />
       )}
     </div>
-    <div className="input-area">
-      <div className="input-wrapper">
-        <input
-          value={inputProps.value}
-          onChange={inputProps.onChange}
-          placeholder={inputProps.placeholder}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend?.(); } }}
-        />
-        <button onClick={onSend}>➤</button>
-      </div>
-    </div>
+    <ChatInput inputProps={inputProps} onSend={onSend} thinking={thinking} />
   </>
 )
 
@@ -146,6 +159,7 @@ function App() {
   const [contextMenu, setContextMenu] = useState<{x:number, y:number, sessionId:string} | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [isThinking, setIsThinking] = useState(false)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -343,22 +357,66 @@ function App() {
         return
       }
     }
+    // Chat with the (now real) session via streaming SSE.
     try {
-      const res = await fetch(`/api/v1/sessions/${sessionId}/chat`, {
+      const res = await fetch(`/api/v1/sessions/${sessionId}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: updated.map(m => ({ role: m.role, content: m.content })) })
       })
-      if (res.ok) {
-        const data = await res.json()
-        const assistantMsg = { role: 'assistant', content: data.reply ?? '' }
-        setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), assistantMsg] }))
-        refreshSessions()
-      } else {
+      if (!res.ok || !res.body) {
         setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), { role: 'assistant', content: 'Error contacting API' }] }))
+        return
       }
+      const assistantIdx = updated.length
+      let accumulated = ''
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let gotMessage = false
+      let currentTurnId = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const events = buffer.split('\n\n')
+        buffer = events.pop() ?? ''
+        for (const evt of events) {
+          const lines = evt.split('\n')
+          let eventType = ''
+          let dataStr = ''
+          for (const line of lines) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim()
+            else if (line.startsWith('data: ')) dataStr = line.slice(6)
+          }
+          if (!dataStr || dataStr === '[DONE]') continue
+          if (eventType === 'turn_start') {
+            setIsThinking(true)
+          } else if (eventType === 'turn_end') {
+            setIsThinking(false)
+          } else if (eventType === 'chunk') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data.content != null && data.content.trim() !== '') {
+                gotMessage = true
+                setMessagesMap(m => {
+                  const arr = [...(m[sessionId] ?? [])]
+                  arr.push({ role: 'assistant', content: data.content })
+                  return { ...m, [sessionId]: arr }
+                })
+              }
+            } catch {}
+          }
+        }
+      }
+      setIsThinking(false)
+      if (!gotMessage) {
+        setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), { role: 'assistant', content: '(no response)' }] }))
+      }
+      refreshSessions()
     } catch (e) {
       console.error(e)
+      setIsThinking(false)
       setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), { role: 'assistant', content: 'Network error' }] }))
     }
   }
@@ -424,6 +482,7 @@ function App() {
             placeholder: 'Are you quite finished...'
           }}
           onSend={handleSend}
+          thinking={isThinking}
         />
       </main>
 
