@@ -16,7 +16,7 @@ public class CopilotHealthService : BackgroundService, ICopilotHealthService
     private readonly string _processName = "copilot";
     private readonly string _executable = "/workspace/EHR/copilot-bin/copilot";
     private readonly string _args = "--headless --port 4321";
-    private readonly string _workingDir = "/workspace/EHR";
+    private readonly string _workingDir = "/workspace/Basil";
 
     public CopilotHealthService(IConsoleService console, ICopilotService copilot, ILogger<CopilotHealthService> logger)
     {

@@ -4,10 +4,10 @@ using System.Text.Json.Nodes;
 namespace CopilotServer.Controllers;
 
 [ApiController]
-[Route("api/config")]
+[Route("api/v1/config")]
 public class ConfigController : ControllerBase
 {
-    private readonly string _configPath = "/workspace/EHR/.config/copilot/config.json";
+    private readonly string _configPath = "/workspace/Basil/.config/copilot/config.json";
     private static readonly object _lock = new();
 
     [HttpGet]

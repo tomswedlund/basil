@@ -1,5 +1,6 @@
 using Microsoft.Copilot;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 #pragma warning disable MCPSDK001
 
@@ -18,6 +19,7 @@ public interface ICopilotService
     Task<bool> UpdateSessionModelAsync(string sessionId, string newModel);
     Task<string?> GetSessionModelAsync(string sessionId);
     CopilotSession? GetSession(string sessionId);
+    Task<CopilotSession> GetOrResumeSessionAsync(string sessionId);
     Task<string> ChatAsync(string sessionId, List<string> messages);
 }
 
@@ -53,7 +55,7 @@ public class CopilotService : ICopilotService
         {
             var file = "/workspace/EHR/copilot-bin/copilot";
             var args = "--headless --port 4321";
-            var psi = _console.CreateStartInfo(file, args, "/workspace/EHR");
+            var psi = _console.CreateStartInfo(file, args, "/workspace/Basil");
             using var proc = Process.Start(psi);
             await Task.Delay(2000, ct);
         }
@@ -62,7 +64,7 @@ public class CopilotService : ICopilotService
     public Task StartAsync(CancellationToken ct = default) => _client.StartAsync();
     public Task StopAsync(CancellationToken ct = default) => _client.StopAsync();
 
-    private readonly string _configPath = "/workspace/EHR/.config/copilot/config.json";
+    private readonly string _configPath = "/workspace/Basil/.config/copilot/config.json";
     
     private (string provider, string modelId, string wireModel) ResolveModel(string model)
     {
@@ -141,31 +143,9 @@ public class CopilotService : ICopilotService
         {
             Model = $"{providerName}/{modelId}",
             SessionId = sessionId,
+            WorkingDirectory = "/workspace/Basil",
             GitHub = new SessionGitHubOptions { Capi = new CapiSessionOptions { Enabled = false } },
-            Inference = new SessionInferenceOptions
-            {
-                DefaultProvider = providerName,
-                Providers = new[]
-                {
-                    new NamedProviderConfig
-                    {
-                        Name = providerName,
-                        Type = "openai",
-                        BaseUrl = GetProviderBaseUrl(providerName),
-                        WireApi = "chat",
-                        ApiKey = GetProviderApiKey(providerName)
-                    }
-                },
-                Models = new[]
-                {
-                    new ProviderModelConfig
-                    {
-                        Id = modelId,
-                        Provider = providerName,
-                        WireModel = wireModel
-                    }
-                }
-            }
+            Inference = BuildInferenceOptions(providerName, modelId, wireModel)
         });
         lock (_sessions)
         {
@@ -214,11 +194,55 @@ public class CopilotService : ICopilotService
         lock (_sessions) { _sessions.TryGetValue(sessionId, out var s); return s; }
     }
 
+    public async Task<CopilotSession> GetOrResumeSessionAsync(string sessionId)
+    {
+        var existing = GetSession(sessionId);
+        if (existing != null) return existing;
+        var meta = await _client.GetSessionMetadataAsync(sessionId);
+        if (meta == null) throw new KeyNotFoundException($"Session {sessionId} not found");
+        var (providerName, modelId, wireModel) = ResolveModel(_sessionModels.GetValueOrDefault(sessionId) ?? "");
+        var session = await _client.ResumeSessionAsync(sessionId, new ResumeSessionOptions
+        {
+            WorkingDirectory = "/workspace/Basil",
+            Inference = BuildInferenceOptions(providerName, modelId, wireModel)
+        });
+        lock (_sessions) { _sessions[sessionId] = session; }
+        return session;
+    }
+
+    private SessionInferenceOptions BuildInferenceOptions(string providerName, string modelId, string wireModel)
+    {
+        return new SessionInferenceOptions
+        {
+            DefaultProvider = providerName,
+            Providers = new[]
+            {
+                new NamedProviderConfig
+                {
+                    Name = providerName,
+                    Type = "openai",
+                    BaseUrl = GetProviderBaseUrl(providerName),
+                    WireApi = "chat",
+                    ApiKey = GetProviderApiKey(providerName)
+                }
+            },
+            Models = new[]
+            {
+                new ProviderModelConfig
+                {
+                    Id = modelId,
+                    Provider = providerName,
+                    WireModel = wireModel
+                }
+            }
+        };
+    }
+
     public async Task<string> ChatAsync(string sessionId, List<string> messages)
     {
-        var session = GetSession(sessionId);
-        if (session == null) throw new KeyNotFoundException($"Session {sessionId} not found");
-        var prompt = string.Join("\n", messages);
+        var session = await GetOrResumeSessionAsync(sessionId);
+        // The Copilot session maintains its own transcript, so send only the latest user prompt.
+        var prompt = messages.LastOrDefault() ?? "";
         var response = await session.SendAndWaitAsync(new MessageOptions { Prompt = prompt });
         return response?.Data?.Content ?? string.Empty;
     }
