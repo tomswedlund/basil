@@ -1,20 +1,48 @@
 import { useState, useEffect, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
 import './App.css'
 import sidebarIcon from './sidebar-toggle.svg'
 import gearIcon from './gear-icon.svg'
 import basilIcon from './basil-icon-med.png'
 
-const UserMessage = ({ content }) => (
-  <div className="message user">
+const UserMessage = ({ content, idx, turnId, lastInTurn }) => (
+  <div className={`message user${lastInTurn ? ' turn-end' : ''}`} data-turn={turnId || ''}>
     <div className="user-bubble">{content}</div>
   </div>
 )
 
-const AssistantMessage = ({ content }) => (
-  <div className="message assistant">
-    <div className="assistant-bubble">{content}</div>
+const AssistantMessage = ({ content, idx, turnId, lastInTurn }) => (
+  <div className={`message assistant${lastInTurn ? ' turn-end' : ''}`} data-turn={turnId || ''}>
+    <div className="assistant-bubble"><ReactMarkdown>{content}</ReactMarkdown></div>
   </div>
 )
+
+const ToolCallMessage = ({ toolName, description, arguments: args, status, result, idx, turnId, lastInTurn }) => {
+  const [expanded, setExpanded] = useState(false)
+  const isRunning = status === 'running'
+  const headerLabel = description || 'Tool call'
+  let prettyArgs = ''
+  try { prettyArgs = JSON.stringify(JSON.parse(args || '{}'), null, 2) } catch { prettyArgs = args || '{}' }
+
+  return (
+    <div className={`message tool-call${lastInTurn ? ' turn-end' : ''}`} data-turn={turnId || ''}>
+      <div className="tool-call-card">
+        <div className="tool-call-header" onClick={() => setExpanded(!expanded)}>
+          <span className="tool-call-toggle">{expanded ? '▼' : '▶'}</span>
+          <span className="tool-call-name">{headerLabel}</span>
+          {!expanded && isRunning && <span className="tool-call-spinner"></span>}
+        </div>
+        {expanded && (
+          <div className="tool-call-body">
+            <pre className="tool-call-args">{prettyArgs}</pre>
+            {isRunning && <div className="tool-call-running">Running ...</div>}
+            {status === 'complete' && result && <pre className="tool-result-output">{result}</pre>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const ThinkingIndicator = () => (
   <div className="thinking-indicator">
@@ -24,11 +52,11 @@ const ThinkingIndicator = () => (
   </div>
 )
 
-const ChatInput = ({ inputProps, onSend, thinking }) => (
-  <div className="input-area">
+const ChatInput = ({ inputProps, onSend, thinking, sticky }) => (
+  <div className={sticky ? 'input-area' : 'input-area-inline'}>
     {thinking && <ThinkingIndicator />}
     <div className="input-wrapper">
-      <input
+      <input 
         value={inputProps.value}
         onChange={inputProps.onChange}
         placeholder={inputProps.placeholder}
@@ -39,17 +67,38 @@ const ChatInput = ({ inputProps, onSend, thinking }) => (
   </div>
 )
 
-const Messages = ({ messages, inputProps, onSend, thinking }) => (
+const Messages = ({ messages, inputProps, onSend, thinking }) => {
+  // Determine if each message is the last in its turn (next message has a different turn or is a user message)
+  const isLastInTurn = (i) => {
+    if (i >= messages.length - 1) return true
+    const cur = messages[i]
+    const next = messages[i + 1]
+    if (next.role === 'user') return true
+    if (cur.turnId && next.turnId && cur.turnId !== next.turnId) return true
+    return false
+  }
+  return (
   <>
     <div className="messages">
-      {messages.map((m, i) =>
-        m.role === 'user'
-          ? <UserMessage key={i} content={m.content} />
-          : <AssistantMessage key={i} content={m.content} />
-      )}
+      {messages.map((m, i) => {
+        const lastInTurn = isLastInTurn(i)
+        if (m.role === 'user') return <UserMessage key={i} content={m.content} idx={i} turnId={m.turnId} lastInTurn={lastInTurn} />
+        if (m.role === 'tool_call') return <ToolCallMessage key={i} toolName={m.toolName} description={m.description} arguments={m.arguments} status={m.status} result={m.result} idx={i} turnId={m.turnId} lastInTurn={lastInTurn} />
+        return <AssistantMessage key={i} content={m.content} idx={i} turnId={m.turnId} lastInTurn={lastInTurn} />
+      })}
     </div>
-    <ChatInput inputProps={inputProps} onSend={onSend} thinking={thinking} />
+    <ChatInput inputProps={inputProps} onSend={onSend} thinking={thinking} sticky />
   </>
+  )
+}
+
+const EmptyState = ({ inputProps, onSend, thinking }) => (
+  <div className="empty-state">
+    <div className="empty-state-content">
+      <h1 className="empty-state-title">Start, you vicious bastard!</h1>
+      <ChatInput inputProps={inputProps} onSend={onSend} thinking={thinking} sticky={false} />
+    </div>
+  </div>
 )
 
 const SidebarHeader = ({ sidebarCollapsed, onToggleSidebar, isMobile, onCloseMobile, onOpenMobile }) => (
@@ -94,7 +143,9 @@ const CollapsibleSection = ({ title, children, isCollapsed, onToggle, showNewBut
       </button>
       <h3>{title}</h3>
       {showNewButton && (
-        <button className="new-chat-btn" onClick={onNew}>+</button>
+        <button className="new-chat-btn" onClick={onNew}>
+          +
+        </button>
       )}
     </div>
     {!isCollapsed && <div className="section-content">{children}</div>}
@@ -146,25 +197,43 @@ const SessionItem = ({ name, isActive, status = 'idle', onClick, onContextMenu, 
 }
 
 function App() {
+  // force reload
   const [input, setInput] = useState('')
   const [sessions, setSessions] = useState<{id:string, title:string, status:string}[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string>('')
-  const [messagesMap, setMessagesMap] = useState<Record<string, {role:string, content:string}[]>>({})
+  const [messagesMap, setMessagesMap] = useState<Record<string, {role:string, content:string, turnId?:string, toolCallId?:string, toolName?:string, description?:string, arguments?:string, status?:string, result?:string}[]>>({})
+  // Temp session ids that exist only locally until the first prompt creates them on the backend.
   const tempIdsRef = useRef<Set<string>>(new Set())
-  const [chatCollapsed, setChatCollapsed] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [sidebarVisible, setSidebarVisible] = useState(true)
-  const [debugMode, setDebugMode] = useState(false)
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
   const [contextMenu, setContextMenu] = useState<{x:number, y:number, sessionId:string} | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [isThinking, setIsThinking] = useState(false)
-
+  const [chatCollapsed, setChatCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarVisible, setSidebarVisible] = useState(true)
+  const [debugMode, setDebugMode] = useState(false)
+  const [debugComponent, setDebugComponent] = useState('')
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
+  
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     setDebugMode(params.get('debug') === '1')
   }, [])
+
+  useEffect(() => {
+    // Apply red border to all instances of the selected component class
+    const styleId = 'debug-highlight-style'
+    let el = document.getElementById(styleId)
+    if (el) el.remove()
+    if (debugComponent) {
+      el = document.createElement('style')
+      el.id = styleId
+      // debugComponent may be pipe-separated CSS classes (e.g. "input-area|input-wrapper")
+      const selectors = debugComponent.split('|').map(c => `.${c.trim()}`).join(', ')
+      el.textContent = `${selectors} { outline: 2px solid red !important; outline-offset: -1px; }`
+      document.head.appendChild(el)
+    }
+  }, [debugComponent])
 
   useEffect(() => {
     const fetchSessions = async () => {
@@ -186,7 +255,7 @@ function App() {
     }
     fetchSessions()
   }, [])
-
+  
   useEffect(() => {
     const handleResize = () => {
       const mobile = window.innerWidth <= 768
@@ -202,17 +271,27 @@ function App() {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
-
+  
   const loadSessionMessages = async (sessionId) => {
     if (tempIdsRef.current.has(sessionId)) return
     try {
       const res = await fetch(`/api/v1/sessions/${sessionId}/messages`)
       if (res.ok) {
-        const msgs: {role:string, content:string}[] = await res.json()
+        const msgs: {role:string, content:string, toolCallId?:string, toolName?:string, description?:string, arguments?:string, status?:string, result?:string}[] = await res.json()
         setMessagesMap(m => ({ ...m, [sessionId]: msgs }))
       }
     } catch (e) {
       console.error('Failed to load session messages', e)
+    }
+  }
+
+  const handleSessionClick = (sessionId) => {
+    setSelectedSessionId(sessionId)
+    setSessions(prev => prev.map(s => 
+      s.id === sessionId ? { ...s, status: 'idle' } : s
+    ))
+    if (!messagesMap[sessionId]) {
+      loadSessionMessages(sessionId)
     }
   }
 
@@ -225,16 +304,6 @@ function App() {
       }
     } catch (e) {
       console.error('Failed to fetch sessions', e)
-    }
-  }
-
-  const handleSessionClick = (sessionId) => {
-    setSelectedSessionId(sessionId)
-    setSessions(prev => prev.map(s =>
-      s.id === sessionId ? { ...s, status: 'idle' } : s
-    ))
-    if (!messagesMap[sessionId]) {
-      loadSessionMessages(sessionId)
     }
   }
 
@@ -309,12 +378,14 @@ function App() {
 
   const handleSend = async () => {
     if (!input.trim()) return
+    // If no session is selected, create a local temp one first (same as clicking +).
     if (!selectedSessionId) {
       const newId = `new_chat_${Date.now()}`
       tempIdsRef.current.add(newId)
       setSessions(prev => [{ id: newId, title: 'New chat', status: 'idle' }, ...prev])
       setMessagesMap(m => ({ ...m, [newId]: [] }))
       setSelectedSessionId(newId)
+      // Continue with the temp session we just created.
       await sendPrompt(newId)
       return
     }
@@ -328,6 +399,7 @@ function App() {
     const updated = [...(messagesMap[id] ?? []), userMsg]
     setMessagesMap(m => ({ ...m, [id]: updated }))
     setInput('')
+    // If this is a local-only temp session, create it on the backend now (with the first prompt).
     if (isTemp) {
       sessionId = `session_${Date.now()}`
       try {
@@ -337,9 +409,11 @@ function App() {
           body: JSON.stringify({ sessionId })
         })
         if (!createRes.ok) {
-          setMessagesMap(m => ({ ...m, [id]: [...(m[id] ?? []), { role: 'assistant', content: 'Failed to create session' }] }))
+          const assistantMsg = { role: 'assistant', content: 'Failed to create session' }
+          setMessagesMap(m => ({ ...m, [id]: [...(m[id] ?? []), assistantMsg] }))
           return
         }
+        // Promote: move messages from temp id to real id, drop the temp entry.
         tempIdsRef.current.delete(id)
         const oldId = id
         setMessagesMap(m => {
@@ -353,7 +427,8 @@ function App() {
         setSelectedSessionId(sessionId)
       } catch (e) {
         console.error(e)
-        setMessagesMap(m => ({ ...m, [id]: [...(m[id] ?? []), { role: 'assistant', content: 'Network error creating session' }] }))
+        const assistantMsg = { role: 'assistant', content: 'Network error creating session' }
+        setMessagesMap(m => ({ ...m, [id]: [...(m[id] ?? []), assistantMsg] }))
         return
       }
     }
@@ -365,7 +440,8 @@ function App() {
         body: JSON.stringify({ messages: updated.map(m => ({ role: m.role, content: m.content })) })
       })
       if (!res.ok || !res.body) {
-        setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), { role: 'assistant', content: 'Error contacting API' }] }))
+        const assistantMsg = { role: 'assistant', content: 'Error contacting API' }
+        setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), assistantMsg] }))
         return
       }
       const assistantIdx = updated.length
@@ -379,6 +455,7 @@ function App() {
         const { done, value } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
+        // Parse SSE events separated by \n\n
         const events = buffer.split('\n\n')
         buffer = events.pop() ?? ''
         for (const evt of events) {
@@ -391,17 +468,87 @@ function App() {
           }
           if (!dataStr || dataStr === '[DONE]') continue
           if (eventType === 'turn_start') {
+            try {
+              const data = JSON.parse(dataStr)
+              currentTurnId = data.turnId ?? ''
+            } catch {}
             setIsThinking(true)
           } else if (eventType === 'turn_end') {
             setIsThinking(false)
           } else if (eventType === 'chunk') {
+            // Assistant text response
             try {
               const data = JSON.parse(dataStr)
               if (data.content != null && data.content.trim() !== '') {
                 gotMessage = true
+                const tid = currentTurnId
                 setMessagesMap(m => {
                   const arr = [...(m[sessionId] ?? [])]
-                  arr.push({ role: 'assistant', content: data.content })
+                  arr.push({ role: 'assistant', content: data.content, turnId: tid })
+                  return { ...m, [sessionId]: arr }
+                })
+              }
+            } catch {}
+          } else if (eventType === 'tool_call') {
+            // The LLM is requesting to run a tool
+            try {
+              const data = JSON.parse(dataStr)
+              gotMessage = true
+              const tid = currentTurnId
+              setMessagesMap(m => {
+                const arr = [...(m[sessionId] ?? [])]
+                arr.push({
+                  role: 'tool_call',
+                  content: '',
+                  toolCallId: data.toolCallId,
+                  toolName: data.toolName,
+                  description: data.description,
+                  arguments: data.arguments,
+                  status: 'running',
+                  turnId: tid
+                })
+                return { ...m, [sessionId]: arr }
+              })
+            } catch {}
+          } else if (eventType === 'tool_result' || eventType === 'tool_execution') {
+            // Tool result — find the matching tool_call by toolCallId and mark it complete
+            try {
+              const data = JSON.parse(dataStr)
+              const toolCallId = data.toolCallId
+              const resultContent = data.content || data.toolResult?.sessionLog || data.toolResult?.textResultForLlm || ''
+              setMessagesMap(m => {
+                const arr = [...(m[sessionId] ?? [])]
+                const tcIdx = arr.findIndex(msg => msg.toolCallId === toolCallId && msg.role === 'tool_call')
+                if (tcIdx >= 0) {
+                  arr[tcIdx] = { ...arr[tcIdx], status: 'complete', result: resultContent }
+                }
+                return { ...m, [sessionId]: arr }
+              })
+            } catch {}
+          } else if (eventType === 'message') {
+            // Legacy: single final message (replaces the last assistant message)
+            try {
+              const data = JSON.parse(dataStr)
+              if (data.content != null) {
+                accumulated = data.content
+                gotMessage = true
+                const tid = currentTurnId
+                setMessagesMap(m => {
+                  const arr = [...(m[sessionId] ?? [])]
+                  arr[assistantIdx] = { role: 'assistant', content: accumulated, turnId: tid }
+                  return { ...m, [sessionId]: arr }
+                })
+              }
+            } catch {}
+          } else {
+            // Delta event (no event: prefix)
+            try {
+              const data = JSON.parse(dataStr)
+              if (data.delta != null) {
+                accumulated += data.delta
+                setMessagesMap(m => {
+                  const arr = [...(m[sessionId] ?? [])]
+                  arr[assistantIdx] = { role: 'assistant', content: accumulated }
                   return { ...m, [sessionId]: arr }
                 })
               }
@@ -410,25 +557,50 @@ function App() {
         }
       }
       setIsThinking(false)
-      if (!gotMessage) {
+      if (!gotMessage && !accumulated) {
         setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), { role: 'assistant', content: '(no response)' }] }))
       }
+      // Copilot materializes the session + summary on first prompt; re-fetch to reflect it.
       refreshSessions()
     } catch (e) {
       console.error(e)
       setIsThinking(false)
-      setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), { role: 'assistant', content: 'Network error' }] }))
+      const assistantMsg = { role: 'assistant', content: 'Network error' }
+      setMessagesMap(m => ({ ...m, [sessionId]: [...(m[sessionId] ?? []), assistantMsg] }))
     }
   }
-
+  
   const messages = messagesMap[selectedSessionId] ?? []
+  const isEmptyState = !selectedSessionId || (tempIdsRef.current.has(selectedSessionId) && messages.length === 0)
 
   return (
+    <>
+    {debugMode && (
+      <div className="debug-header">
+        <select className="debug-select" value={debugComponent} onChange={e => setDebugComponent(e.target.value)}>
+          <option value="">— Select component to highlight —</option>
+          <option value="message user|message assistant|message tool-call">UserMessage / AssistantMessage / ToolCallMessage</option>
+          <option value="tool-call-card">ToolCallMessage (card)</option>
+          <option value="tool-call-header">ToolCallMessage (header)</option>
+          <option value="tool-call-body">ToolCallMessage (body)</option>
+          <option value="thinking-indicator">ThinkingIndicator</option>
+          <option value="input-area|input-wrapper">ChatInput</option>
+          <option value="messages">Messages</option>
+          <option value="empty-state|empty-state-content">EmptyState</option>
+          <option value="sidebar|sidebar-header|sidebar-icons">SidebarHeader</option>
+          <option value="collapsible-section|section-header|section-content">CollapsibleSection</option>
+          <option value="chat-header|chat-header-title">ChatHeader</option>
+          <option value="session-item">SessionItem</option>
+          <option value="chat-area">App (chat-area)</option>
+        </select>
+        {debugComponent && <span className="debug-label">Highlighting: {debugComponent.split('|').map(c => `.${c}`).join(' / ')}</span>}
+      </div>
+    )}
     <div className={`copilot-app ${debugMode ? 'debug-mode' : ''}`}>
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${isMobile && sidebarVisible ? 'visible' : ''}`}>
-        <SidebarHeader
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+        <SidebarHeader 
+          sidebarCollapsed={sidebarCollapsed} 
+          onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} 
           isMobile={isMobile}
           onCloseMobile={() => setSidebarVisible(false)}
           onOpenMobile={() => {
@@ -437,8 +609,8 @@ function App() {
           }}
         />
         {!sidebarCollapsed && (
-          <CollapsibleSection
-            title="CHAT"
+          <CollapsibleSection 
+            title="CHAT" 
             isCollapsed={chatCollapsed}
             onToggle={() => setChatCollapsed(!chatCollapsed)}
             showNewButton={true}
@@ -446,7 +618,7 @@ function App() {
           >
             <div className="sessions-list">
               {sessions.map(s => (
-                <SessionItem
+                <SessionItem 
                   key={s.id}
                   name={s.title}
                   isActive={selectedSessionId === s.id}
@@ -464,8 +636,8 @@ function App() {
           </CollapsibleSection>
         )}
       </aside>
-
-      <main
+      
+      <main 
         className="chat-area"
         onClick={() => {
           if (isMobile && sidebarVisible) {
@@ -474,16 +646,28 @@ function App() {
         }}
       >
         <ChatHeader title={sessions.find(s => s.id === selectedSessionId)?.title || selectedSessionId || 'No session'} onToggleSidebar={() => setSidebarVisible(!sidebarVisible)} isMobile={isMobile} />
-        <Messages
-          messages={messages}
-          inputProps={{
-            value: input,
-            onChange: e => setInput(e.target.value),
-            placeholder: 'Are you quite finished...'
-          }}
-          onSend={handleSend}
-          thinking={isThinking}
-        />
+        {isEmptyState ? (
+          <EmptyState
+            inputProps={{
+              value: input,
+              onChange: e => setInput(e.target.value),
+              placeholder: 'Are you quite finished...'
+            }}
+            onSend={handleSend}
+            thinking={isThinking}
+          />
+        ) : (
+          <Messages 
+            messages={messages}
+            inputProps={{
+              value: input,
+              onChange: e => setInput(e.target.value),
+              placeholder: 'Are you quite finished...'
+            }}
+            onSend={handleSend}
+            thinking={isThinking}
+          />
+        )}
       </main>
 
       {contextMenu && (
@@ -496,6 +680,7 @@ function App() {
         </>
       )}
     </div>
+    </>
   )
 }
 
