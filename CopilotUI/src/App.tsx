@@ -123,12 +123,26 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [debugMode, setDebugMode] = useState(false)
+  const [debugComponent, setDebugComponent] = useState('')
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
   
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     setDebugMode(params.get('debug') === '1')
   }, [])
+
+  useEffect(() => {
+    const styleId = 'debug-highlight-style'
+    let el = document.getElementById(styleId)
+    if (el) el.remove()
+    if (debugComponent) {
+      el = document.createElement('style')
+      el.id = styleId
+      const selectors = debugComponent.split('|').map(c => `.${c.trim()}`).join(', ')
+      el.textContent = `${selectors} { outline: 2px solid red !important; outline-offset: -1px; }`
+      document.head.appendChild(el)
+    }
+  }, [debugComponent])
   
   useEffect(() => {
     const handleResize = () => {
@@ -159,6 +173,25 @@ function App() {
   }))
 
   return (
+    <>
+    {debugMode && (
+      <div className="debug-header">
+        <select className="debug-select" value={debugComponent} onChange={e => setDebugComponent(e.target.value)}>
+          <option value="">— Select component to highlight —</option>
+          <option value="message user|message assistant">UserMessage / AssistantMessage</option>
+          <option value="thinking-indicator">ThinkingIndicator</option>
+          <option value="input-area|input-wrapper">ChatInput</option>
+          <option value="messages">Messages</option>
+          <option value="empty-state|empty-state-content">EmptyState</option>
+          <option value="sidebar|sidebar-header|sidebar-icons">SidebarHeader</option>
+          <option value="collapsible-section|section-header|section-content">CollapsibleSection</option>
+          <option value="chat-header|chat-header-title">ChatHeader</option>
+          <option value="session-item">SessionItem</option>
+          <option value="chat-area">App (chat-area)</option>
+        </select>
+        {debugComponent && <span className="debug-label">Highlighting: {debugComponent.split('|').map(c => `.${c}`).join(' / ')}</span>}
+      </div>
+    )}
     <div className={`copilot-app ${debugMode ? 'debug-mode' : ''}`}>
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${isMobile && sidebarVisible ? 'visible' : ''}`}>
         <SidebarHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} isMobile={isMobile} />
@@ -196,6 +229,7 @@ function App() {
         />
       </main>
     </div>
+    </>
   )
 }
 
