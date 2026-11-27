@@ -41,16 +41,15 @@ public class SessionsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<IActionResult> Get(string id)
     {
-        var exists = await _service.SessionExistsAsync(id);
-        if (!exists) return NotFound();
-        return Ok(new { id });
+        var info = await _service.GetSessionInfoAsync(id);
+        if (info == null) return NotFound();
+        return Ok(info);
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
-        var deleted = await _service.DeleteSessionAsync(id);
-        if (!deleted) return NotFound();
+        await _service.DeleteSessionAsync(id);
         return NoContent();
     }
 
@@ -66,7 +65,36 @@ public class SessionsController : ControllerBase
         return Ok(new { id, model = request.Model });
     }
 
+    [HttpPatch("{id}/title")]
+    public async Task<IActionResult> UpdateTitle(string id, [FromBody] UpdateTitleRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Title))
+            return BadRequest("Title is required");
+
+        var exists = await _service.SessionExistsAsync(id);
+        if (!exists) return NotFound();
+
+        await _service.RenameSessionAsync(id, request.Title);
+        var info = await _service.GetSessionInfoAsync(id);
+        return Ok(info);
+    }
+
+    [HttpGet("{id}/messages")]
+    public async Task<IActionResult> GetMessages(string id)
+    {
+        try
+        {
+            var messages = await _service.GetSessionMessagesAsync(id);
+            return Ok(messages);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
 }
 
 public record CreateSessionRequest(string SessionId, string? Model);
 public record UpdateModelRequest(string Model);
+public record UpdateTitleRequest(string Title);
