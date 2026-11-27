@@ -4,7 +4,7 @@ using CopilotServer.Services;
 namespace CopilotServer.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v1/[controller]")]
 public class SessionsController : ControllerBase
 {
     private readonly ICopilotService _service;
